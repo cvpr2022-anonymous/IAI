@@ -151,7 +151,7 @@ class IAICondInst(SingleStageDetector):
         embs = torch.cat(embs, dim=1)
         lstt_feats = (feats[0], feats[1], feats[2], embs)
 
-        enc_feats = self.track_neck(lstt_feats)
+        enc_feats = self.neck(lstt_feats)
 
         results, self.pred_masks, self.new_inst_exist, cls_scores = \
             self.bbox_head.simple_test(enc_feats, img_metas, rescale=rescale,

@@ -48,8 +48,7 @@ def multiclass_nms(multi_bboxes,
                    nms_cfg,
                    max_num=-1,
                    score_factors=None,
-                   is_first=False,
-                   iter=0):
+                   is_first=False):
     bboxes = multi_bboxes.reshape(-1, 4)
     cls_scores = multi_cls_scores.max(dim=1)[0].reshape(-1)
     id_scores = multi_id_scores.max(dim=1)[0].reshape(-1)
@@ -196,7 +195,7 @@ class IAICondInstHead(AnchorFreeHead):
                  **kwargs):
         self.max_obj_num = max_obj_num
         self.id_out_channels = self.max_obj_num
-        super(CondInstHead, self).__init__(num_classes, in_channels, **kwargs)
+        super(IAICondInstHead, self).__init__(num_classes, in_channels, **kwargs)
         self.strides = strides
         self.stacked_convs = stacked_convs
         self.conv_cfg = conv_cfg
@@ -235,7 +234,7 @@ class IAICondInstHead(AnchorFreeHead):
                     padding=1,
                     conv_cfg=self.conv_cfg,
                     norm_cfg=self.norm_cfg))
-            if i == 0:
+            if i <= 0:
                 self.id_convs.append(
                     ConvModule(
                         chn,
@@ -410,6 +409,44 @@ class IAICondInstHead(AnchorFreeHead):
         mask_feat = self.mask_head(mask_feat)
 
         return cls_scores, id_scores, bbox_preds, centernesses, kernel_preds, mask_feat
+
+    @force_fp32(apply_to=('cls_scores', 'bbox_preds', 'centernesses'))
+    def loss(self,
+             cls_scores,
+             id_scores,
+             bbox_preds,
+             centernesses,
+             kernel_preds,
+             mask_feats,
+             gt_bboxes,
+             gt_labels,
+             gt_ids,
+             img_metas,
+             gt_bboxes_ignore=None,
+             gt_masks_list=None,
+             is_first=False):
+        """Compute losses of the head.
+
+        Args:
+            cls_scores (list[Tensor]): Box scores for each scale level
+                Has shape (N, num_classes, H, W)
+            bbox_preds (list[Tensor]): Box energies / deltas for each scale
+                level with shape (N, 4, H, W)
+            centernesses (list[Tensor]): Centerness for each scale
+                level with shape (N, 1, H, W)
+            gt_bboxes (list[Tensor]): Ground truth bboxes for each image with
+                shape (num_gts, 4) in [tl_x, tl_y, br_x, br_y] format.
+            gt_labels (list[Tensor]): class indices corresponding to each box
+            img_metas (list[dict]): Meta information of each image, e.g.,
+                image size, scaling factor, etc.
+            gt_bboxes_ignore (list[Tensor] | None): specify which bounding
+                boxes can be ignored when computing the loss.
+
+        Returns:
+            dict[str, Tensor]: A dictionary of loss components.
+        """
+
+        pass
 
     def forward_train(self,
                       x,
@@ -606,8 +643,7 @@ class IAICondInstHead(AnchorFreeHead):
                 rescale,
                 with_nms,
                 test_mode=test_mode,
-                is_first=is_first,
-                iter=self.iter)
+                is_first=is_first)
 
             if use_pred:
                 keep = []
@@ -728,8 +764,7 @@ class IAICondInstHead(AnchorFreeHead):
                            rescale=False,
                            with_nms=True,
                            test_mode=False,
-                           is_first=False,
-                           iter=0):
+                           is_first=False):
         """Transform outputs for a single batch item into labeled boxes.
 
         Args:
@@ -839,8 +874,7 @@ class IAICondInstHead(AnchorFreeHead):
             cfg.nms,
             cfg.max_per_img,
             score_factors=mlvl_centerness,
-            is_first=is_first,
-            iter=iter)
+            is_first=is_first)
 
         det_id_scores = mlvl_id_scores[det_inds]
         det_cls_scores = mlvl_scores[det_inds] * mlvl_centerness[det_inds].unsqueeze(1)
