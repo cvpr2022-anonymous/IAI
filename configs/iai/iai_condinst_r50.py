@@ -32,7 +32,7 @@ model = dict(
         self_heads=4,
         attn_heads=2),
     bbox_head=dict(
-        type='CondInstHead',
+        type='IAICondInstHead',
         num_classes=40,
         max_obj_num=max_obj_num,
         in_channels=256,
@@ -76,7 +76,7 @@ model = dict(
         max_per_img=10))
 # dataset settings
 dataset_type = 'YTVOSDataset'
-data_root = ''
+data_root = 'data/'
 img_norm_cfg = dict(
     mean=[123.68, 116.779, 103.939], std=[58.393, 57.12, 57.375], to_rgb=True)
 train_pipeline = [
