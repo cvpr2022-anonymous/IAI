@@ -114,13 +114,8 @@ class LSTTBlock(BaseModule):
             one_hot_mask = torch.einsum(
                 'bohw,bot->bthw', one_hot_mask, self.id_shuffle_matrix)
 
-        try:
-            id_emb = self.get_id_emb(one_hot_mask).view(
-                self.batch_size, -1, self.enc_hw).permute(2, 0, 1)
-        except:
-            print('fuck')
-            import pdb
-            pdb.set_trace()
+        id_emb = self.get_id_emb(one_hot_mask).view(
+            self.batch_size, -1, self.enc_hw).permute(2, 0, 1)
 
         return id_emb
 
@@ -132,7 +127,6 @@ class LSTTBlock(BaseModule):
         return list(zip(*new_xs))
 
     def update_size(self, enc_size):
-        #self.input_size_2d = input_size
         self.enc_size_2d = enc_size
         self.enc_hw = self.enc_size_2d[0] * self.enc_size_2d[1]
 
@@ -144,23 +138,6 @@ class LSTTBlock(BaseModule):
         lstt_curr_memories, lstt_long_memories, lstt_short_memories = zip(*lstt_memories)
 
         return lstt_embs, lstt_curr_memories, lstt_long_memories, lstt_short_memories
-
-    def process_id(self, gt_ids):
-        import copy
-        ori_gt_ids = copy.deepcopy(gt_ids)
-        for img_id in range(self.batch_size):
-            ids_set = set()
-            for frame in range(5):
-                gt_id_set = set(gt_ids[img_id + frame * self.batch_size].cpu().numpy().tolist())
-                new_ids = gt_id_set - ids_set
-                if len(new_ids) > 0:
-                    for new_id in new_ids:
-                        for index, gt_id in enumerate(gt_id_set):
-                            if new_id == gt_id:
-                                gt_ids[img_id + frame * self.batch_size][index] = self.max_obj_num
-                ids_set = ids_set | gt_id_set
-
-        return ori_gt_ids
 
     def match_propogate_one_frame(self, enc_embs):
         self.frame_step += 1
@@ -286,6 +263,3 @@ class LSTTBlock(BaseModule):
             curr_lstt_embs = self.match_propogate_one_frame(enc_embs)
 
         return curr_lstt_embs
-
-
-
