@@ -49,14 +49,25 @@ def encode_mask_results(mask_results):
     else:
         cls_segms = mask_results
     num_classes = len(cls_segms)
-    encoded_mask_results = [[] for _ in range(num_classes)]
+    if num_classes == 1:
+        encoded_mask_results = {}
+    else:
+        encoded_mask_results = [[] for _ in range(num_classes)]
     for i in range(len(cls_segms)):
-        for cls_segm in cls_segms[i]:
-            encoded_mask_results[i].append(
-                mask_util.encode(
-                    np.array(
-                        cls_segm[:, :, np.newaxis], order='F',
-                        dtype='uint8'))[0])  # encoded with RLE
+        if isinstance(cls_segms[i], dict):
+            for idx, cls_segm in cls_segms[i].items():
+                encoded_mask_results[idx] = \
+                    mask_util.encode(
+                        np.array(
+                            cls_segm[:, :, np.newaxis], order='F',
+                            dtype='uint8'))[0]  # encoded with RLE
+        else:
+            for cls_segm in cls_segms[i]:
+                encoded_mask_results[i].append(
+                    mask_util.encode(
+                        np.array(
+                            cls_segm[:, :, np.newaxis], order='F',
+                            dtype='uint8'))[0])  # encoded with RLE
     if isinstance(mask_results, tuple):
         return encoded_mask_results, cls_mask_scores
     else:
