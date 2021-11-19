@@ -46,13 +46,8 @@ class LSTTBlock(BaseModule):
                                              attn_heads,
                                              return_intermediate=True)
 
-        self.use_c5 = False #True
-        if self.use_c5:
-            self.patch_wise_id_bank = nn.Conv2d(
-                max_obj_num + 1, feat_channels, kernel_size=17, stride=16, padding=8)
-        else:
-            self.patch_wise_id_bank = nn.Conv2d(
-                max_obj_num + 1, feat_channels, kernel_size=33, stride=32, padding=16)
+        self.patch_wise_id_bank = nn.Conv2d(
+            max_obj_num + 1, feat_channels, kernel_size=33, stride=32, padding=16)
 
         self.pos_generator = PositionEmbeddingSine(
             feat_channels // 2, normalize=True)
@@ -143,12 +138,8 @@ class LSTTBlock(BaseModule):
 
     def LSTT_forward(self, curr_embs, long_term_memories, short_term_memories, long_term_id=None, pos_emb=None, size_2d=(14, 14)):
 
-        if self.use_c5:
-            n, c, h, w = curr_embs[-2].size()
-            curr_emb = curr_embs[-2].view(n, c, h * w).permute(2, 0, 1)
-        else:
-            n, c, h, w = curr_embs[-1].size()
-            curr_emb = curr_embs[-1].view(n, c, h * w).permute(2, 0, 1)
+        n, c, h, w = curr_embs[-1].size()
+        curr_emb = curr_embs[-1].view(n, c, h * w).permute(2, 0, 1)
         lstt_embs, lstt_memories = self.LSTT(curr_emb, long_term_memories, short_term_memories, long_term_id, pos_emb, size_2d)
         lstt_curr_memories, lstt_long_memories, lstt_short_memories = zip(*lstt_memories)
 
@@ -199,20 +190,13 @@ class LSTTBlock(BaseModule):
             exit()
 
         if self.enc_size_2d is None:
-            if self.use_c5:
-                self.update_size(curr_enc_embs[-2].size()[2:])
-            else:
-                self.update_size(curr_enc_embs[-1].size()[2:])
+            self.update_size(curr_enc_embs[-1].size()[2:])
 
         self.curr_enc_embs = curr_enc_embs
         self.curr_one_hot_mask = curr_one_hot_mask
 
-        if self.use_c5:
-            self.pos_emb = self.get_pos_emb(curr_enc_embs[-2]).expand(self.batch_size, -1, -1, -1).view(
-                self.batch_size, -1, self.enc_hw).permute(2, 0, 1)
-        else:
-            self.pos_emb = self.get_pos_emb(curr_enc_embs[-1]).expand(self.batch_size, -1, -1, -1).view(
-                self.batch_size, -1, self.enc_hw).permute(2, 0, 1)
+        self.pos_emb = self.get_pos_emb(curr_enc_embs[-1]).expand(self.batch_size, -1, -1, -1).view(
+            self.batch_size, -1, self.enc_hw).permute(2, 0, 1)
 
         curr_id_emb = self.assign_identity(curr_one_hot_mask)
         self.curr_id_embs = curr_id_emb
@@ -292,10 +276,7 @@ class LSTTBlock(BaseModule):
         """
 
         if self.enc_size_2d is None:
-            if self.use_c5:
-                self.update_size(enc_embs[-2].size()[2:])
-            else:
-                self.update_size(enc_embs[-1].size()[2:])
+            self.update_size(enc_embs[-1].size()[2:])
 
         if self.frame_step == 0:
             curr_lstt_embs = self.add_reference_frame(enc_embs, id_mask)
@@ -303,15 +284,6 @@ class LSTTBlock(BaseModule):
             self.frame_step += 1
         else:
             curr_lstt_embs = self.match_propogate_one_frame(enc_embs)
-
-        '''
-        self.iter += 1
-        if self.iter % 1000 == 0:
-            print('id_emb_time:', self.id_emb_time)
-            print('lstt_forward_time:', self.lstt_forward_time)
-        if (not self.first_inst_exist) and new_inst_exist:
-            self.first_inst_exist = True
-        '''
 
         return curr_lstt_embs
 
