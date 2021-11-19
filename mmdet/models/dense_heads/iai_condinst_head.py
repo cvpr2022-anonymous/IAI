@@ -583,10 +583,7 @@ class IAICondInstHead(AnchorFreeHead):
         featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
 
         if is_first:
-            if test_mode:
-                self.curr_inst_id = [0 for i in range(len(img_metas))]
-            else:
-                self.curr_inst_id = [max(gt_ori_ids[i]).item()+1 for i in range(len(img_metas))]
+            self.curr_inst_id = [0 for i in range(len(img_metas))]
         mlvl_points, mlvl_strides = self.get_points(featmap_sizes, bbox_preds[0].dtype,
             bbox_preds[0].device)
 
@@ -623,9 +620,6 @@ class IAICondInstHead(AnchorFreeHead):
             img_shape = img_metas[img_id]['img_shape']
             scale_factor = img_metas[img_id]['scale_factor']
             ori_shape = img_metas[img_id]['ori_shape']
-            if (use_pred) and (not test_mode):
-                ori_shape = img_metas[img_id]['pad_shape']
-                rescale = False
 
             det_bboxes, det_id_scores, det_cls_scores, ori_masks, det_masks = self._get_bboxes_single(
                 cls_score_list,
@@ -672,10 +666,9 @@ class IAICondInstHead(AnchorFreeHead):
                 if len(keep) > 0:
                     det_bboxes = det_bboxes[keep]
                     det_id_scores = det_id_scores[keep]
-                    if test_mode:
-                        if ori_masks is not None:
-                            ori_masks = ori_masks[keep]
-                        det_cls_scores = det_cls_scores[keep]
+                    if ori_masks is not None:
+                        ori_masks = ori_masks[keep]
+                    det_cls_scores = det_cls_scores[keep]
 
                 from scipy.optimize import linear_sum_assignment
                 if is_first:
@@ -698,20 +691,10 @@ class IAICondInstHead(AnchorFreeHead):
 
                     if (is_first) or (id_pred >= curr_max_id):
                         new_inst_exists = True
-                        if test_mode:
-                            id_pred = self.curr_inst_id[img_id]
-                            self.curr_inst_id[img_id] += 1
-                            if self.curr_inst_id[img_id] > self.max_obj_num-2:
-                                self.curr_inst_id[img_id] = self.max_obj_num-2
-                        else:
-                            idx = gt_id_preds[i]
-                            if idx < curr_max_id:
-                                id_pred = idx
-                            else:
-                                id_pred = self.curr_inst_id[img_id]
-                                self.curr_inst_id[img_id] += 1
-                                if self.curr_inst_id[img_id] > self.max_obj_num-2:
-                                    self.curr_inst_id[img_id] = self.max_obj_num-2
+                        id_pred = self.curr_inst_id[img_id]
+                        self.curr_inst_id[img_id] += 1
+                        if self.curr_inst_id[img_id] > self.max_obj_num-2:
+                            self.curr_inst_id[img_id] = self.max_obj_num-2
                     if id_pred in det_obj_ids:
 
                         id_pred = self.curr_inst_id[img_id]
@@ -720,13 +703,9 @@ class IAICondInstHead(AnchorFreeHead):
                             self.curr_inst_id[img_id] = self.max_obj_num-2
 
                     det_obj_ids.append(id_pred)
-                    if test_mode:
-                        cls_scores_dict[id_pred] = det_cls_scores[i]
+                    cls_scores_dict[id_pred] = det_cls_scores[i]
                     id_masks[img_id][id_pred] = new_pad_mask #* det_cls_scores[i].max()
                     id_masks[img_id][self.max_obj_num][new_pad_mask] = 0
-
-                if not test_mode:
-                    continue
 
             if len(keep) == 0:
                 bbox_results = {}
@@ -743,10 +722,7 @@ class IAICondInstHead(AnchorFreeHead):
             mask_results_list.append(mask_results)
 
         if use_pred:
-            if (not test_mode):
-                return id_masks
-            else:
-                return bbox_results, mask_results_list, id_masks, new_inst_exists, cls_scores_dict
+            return bbox_results, mask_results_list, id_masks, new_inst_exists, cls_scores_dict
 
     def _get_bboxes_single(self,
                            cls_scores,
@@ -855,12 +831,8 @@ class IAICondInstHead(AnchorFreeHead):
         mlvl_id_scores = torch.cat([mlvl_id_scores, padding], dim=1)
         mlvl_centerness = torch.cat(mlvl_centerness)
 
-        if is_first:
-            cls_score_thr = 0.1
-            id_score_thr = 0.2 #cfg.score_thr
-        else:
-            cls_score_thr = 0.1
-            id_score_thr = 0.2 #0.2 #cfg.score_thr
+        cls_score_thr = 0.1
+        id_score_thr = 0.1
         det_bboxes, det_kernels_pred, det_points, det_strides, det_inds = multiclass_nms(
             mlvl_bboxes,
             mlvl_scores,
@@ -868,7 +840,6 @@ class IAICondInstHead(AnchorFreeHead):
             mlvl_kernels_pred,
             flatten_mlvl_points,
             flatten_mlvl_strides,
-            #cfg.score_thr,
             cls_score_thr,
             id_score_thr,
             cfg.nms,
@@ -902,28 +873,15 @@ class IAICondInstHead(AnchorFreeHead):
             mask_logits = mask_logits.reshape(-1, 1, mask_feat.size(1), mask_feat.size(2))
             mask_logits = aligned_bilinear(mask_logits, 2).sigmoid()
 
-            if test_mode:
-                pred_global_masks = aligned_bilinear(mask_logits, 4)
-                pred_global_masks = pred_global_masks[:, :, :img_shape[0], :img_shape[1]]
-                ori_masks = F.interpolate(
-                    pred_global_masks,
-                    size=(ori_shape[0], ori_shape[1]),
-                    mode='bilinear',
-                    align_corners=False).squeeze(1)
-                ori_masks.gt_(0.5)
-                masks = aligned_bilinear(mask_logits, 4).squeeze(1)
-            else:
-                ori_masks = None
-                if rescale:
-                    pred_global_masks = aligned_bilinear(mask_logits, 4)
-                    pred_global_masks = pred_global_masks[:, :, :img_shape[0], :img_shape[1]]
-                    masks = F.interpolate(
-                        pred_global_masks,
-                        size=(ori_shape[0], ori_shape[1]),
-                        mode='bilinear',
-                        align_corners=False).squeeze(1)
-                else:
-                    masks = aligned_bilinear(mask_logits, 4).squeeze(1)
+            pred_global_masks = aligned_bilinear(mask_logits, 4)
+            pred_global_masks = pred_global_masks[:, :, :img_shape[0], :img_shape[1]]
+            ori_masks = F.interpolate(
+                pred_global_masks,
+                size=(ori_shape[0], ori_shape[1]),
+                mode='bilinear',
+                align_corners=False).squeeze(1)
+            ori_masks.gt_(0.5)
+            masks = aligned_bilinear(mask_logits, 4).squeeze(1)
             masks.gt_(0.5)
         return det_bboxes, det_id_scores, det_cls_scores, ori_masks, masks
 
@@ -1074,7 +1032,6 @@ class IAICondInstHead(AnchorFreeHead):
         pot_gt_inds = min_area_inds[labels < self.num_classes]
 
         return labels, ids, bbox_targets, pot_gt_inds
-
 
     def get_targets_single(self, gt_bboxes, gt_labels, gt_masks, gt_ids,
                             points, regress_ranges, num_points_per_lvl):

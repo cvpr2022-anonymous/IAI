@@ -38,7 +38,7 @@ class LSTTBlock(BaseModule):
         super().__init__()
         self.max_obj_num = max_obj_num
 
-        self.long_term_mem_gap = 5 #9999
+        self.long_term_mem_gap = 3 #9999
 
         self.LSTT = LongShortTermTransformer(lstt_num,
                                              feat_channels,
