@@ -27,6 +27,10 @@ def generate_permute_matrix(dim, num, keep_first=True):
 
 @HEADS.register_module()
 class LSTTBlock(BaseModule):
+    ''' lstt block for association across frames
+        In this lstt block, we use long_term_memories to store global memory
+            & shor_term_memories to store short memory
+    '''
 
     def __init__(self,
                  max_obj_num=50,
@@ -39,7 +43,7 @@ class LSTTBlock(BaseModule):
         super().__init__()
         self.max_obj_num = max_obj_num
 
-        self.global_mem_interval = global_mem_interval
+        self.long_term_mem_interval = global_mem_interval
 
         self.LSTT = LongShortTermTransformer(lstt_num,
                                              feat_channels,
@@ -229,7 +233,7 @@ class LSTTBlock(BaseModule):
 
         self.short_term_memories = lstt_curr_memories_2d
 
-        if (self.frame_step - self.last_mem_step >= self.global_mem_interval) or (new_inst_exist):
+        if (self.frame_step - self.last_mem_step >= self.long_term_mem_interval) or (new_inst_exist):
             self.update_long_term_memory(lstt_curr_memories)
             self.last_mem_step = self.frame_step
 
