@@ -39,7 +39,7 @@ class LSTTBlock(BaseModule):
         super().__init__()
         self.max_obj_num = max_obj_num
 
-        self.global_mem_interval = global_mem_interval#9999
+        self.global_mem_interval = global_mem_interval
 
         self.LSTT = LongShortTermTransformer(lstt_num,
                                              feat_channels,

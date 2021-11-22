@@ -831,8 +831,8 @@ class IAICondInstHead(AnchorFreeHead):
         mlvl_id_scores = torch.cat([mlvl_id_scores, padding], dim=1)
         mlvl_centerness = torch.cat(mlvl_centerness)
 
-        cls_score_thr = 0.1
-        id_score_thr = 0.1
+        id_score_thr = cfg.id_score_thr
+        cls_score_thr = cfg.cls_score_thr
         det_bboxes, det_kernels_pred, det_points, det_strides, det_inds = multiclass_nms(
             mlvl_bboxes,
             mlvl_scores,
