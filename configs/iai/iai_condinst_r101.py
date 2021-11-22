@@ -30,7 +30,8 @@ model = dict(
         in_channels=256,
         feat_channels=256,
         self_heads=4,
-        attn_heads=2),
+        attn_heads=2,
+        global_mem_interval=3),
     bbox_head=dict(
         type='IAICondInstHead',
         num_classes=40,
@@ -71,11 +72,11 @@ model = dict(
     test_cfg = dict(
         nms_pre=1000,
         min_bbox_size=0,
-        score_thr=0.05,
+        id_score_thr=0.1,
+        cls_score_thr=0.1,
         nms=dict(type='nms', iou_threshold=0.5),
         max_per_img=10))
 # dataset settings
-#dataset_type = 'CocoDataset'
 dataset_type = 'YTVOSDataset'
 data_root = 'data/'
 img_norm_cfg = dict(
@@ -83,7 +84,6 @@ img_norm_cfg = dict(
 train_pipeline = [
     dict(type='LoadImageFromFile'),
     dict(type='LoadAnnotations', with_bbox=True, with_mask=True, with_id=True),
-    #dict(type='Resize', img_scale=(640, 360), keep_ratio=True),
     dict(type='Resize', img_scale=[(649, 360), (960, 480)], keep_ratio=True),
     dict(type='RandomFlip', flip_ratio=0.5),
     dict(type='Normalize', **img_norm_cfg),
@@ -112,7 +112,6 @@ data = dict(
     train=dict(
         type=dataset_type,
         ann_file=data_root + 'annotations/instances_train_sub.json',
-        #ann_file=data_root + 'train/instances.json',
         img_prefix=data_root + 'train/JPEGImages',
         pipeline=train_pipeline,
         with_mask=True,
@@ -121,7 +120,6 @@ data = dict(
         with_track=True),
     val=dict(
         type=dataset_type,
-        #ann_file=data_root + 'valid/instances.json',
         ann_file=data_root + 'annotations/instances_val_sub.json',
         img_prefix=data_root + 'valid/JPEGImages',
         pipeline=test_pipeline,
@@ -139,29 +137,13 @@ data = dict(
         test_mode=True,
         with_track=True))
 
-# optimizer
-optimizer = dict(
-    type='AdamW',
-    lr=0.0001,
-    weight_decay=0.0001,
-    paramwise_cfg=dict(custom_keys={'backbone': dict(lr_mult=0.1, decay_mult=0.9)}))
-optimizer_config = dict(grad_clip=None)
-# learning policy
-lr_config = dict(
-    policy='step',
-    warmup='linear',
-    warmup_iters=500,
-    warmup_ratio=0.001,
-    step=[8, 11])
 runner = dict(type='EpochBasedRunner', max_epochs=12)
 checkpoint_config = dict(interval=1)
-# yapf:disable
 log_config = dict(
     interval=50,
     hooks=[
         dict(type='TextLoggerHook'),
     ])
-# yapf:enable
 evaluation = dict(interval=1, metric=['bbox','segm'])
 device_ids = range(8)
 dist_params = dict(backend='nccl')
