@@ -8,9 +8,9 @@ from mmcv.runner import ModuleList
 from mmdet.models.builder import HEADS
 
 from mmcv.runner import BaseModule, auto_fp16, force_fp32
-from networks.layers.transformer import LongShortTermTransformer
-from networks.layers.position import PositionEmbeddingSine
-from networks.layers.basic import ConvGN, seq_to_2d
+from .transformer import LongShortTermTransformer
+from .position import PositionEmbeddingSine
+from .basic import ConvGN, seq_to_2d
 
 
 def generate_permute_matrix(dim, num, keep_first=True):
@@ -34,11 +34,12 @@ class LSTTBlock(BaseModule):
                  in_channels=256,
                  feat_channels=256,
                  self_heads=3,
-                 attn_heads=2):
+                 attn_heads=2,
+                 global_mem_interval=9999):
         super().__init__()
         self.max_obj_num = max_obj_num
 
-        self.long_term_mem_gap = 3 #9999
+        self.global_mem_interval = global_mem_interval#9999
 
         self.LSTT = LongShortTermTransformer(lstt_num,
                                              feat_channels,
@@ -55,9 +56,6 @@ class LSTTBlock(BaseModule):
         self._init_weight()
 
         self.restart()
-        self.id_emb_time = 0
-        self.lstt_forward_time = 0
-        self.iter = 0
 
     def _init_weight(self):
         nn.init.xavier_uniform_(self.patch_wise_id_bank.weight)
@@ -108,8 +106,6 @@ class LSTTBlock(BaseModule):
         return id_emb
 
     def assign_identity(self, one_hot_mask):
-        import time
-
         if self.enable_id_shuffle:
             one_hot_mask = torch.einsum(
                 'bohw,bot->bthw', one_hot_mask, self.id_shuffle_matrix)
@@ -131,7 +127,6 @@ class LSTTBlock(BaseModule):
         self.enc_hw = self.enc_size_2d[0] * self.enc_size_2d[1]
 
     def LSTT_forward(self, curr_embs, long_term_memories, short_term_memories, long_term_id=None, pos_emb=None, size_2d=(14, 14)):
-
         n, c, h, w = curr_embs[-1].size()
         curr_emb = curr_embs[-1].view(n, c, h * w).permute(2, 0, 1)
         lstt_embs, lstt_memories = self.LSTT(curr_emb, long_term_memories, short_term_memories, long_term_id, pos_emb, size_2d)
@@ -234,7 +229,7 @@ class LSTTBlock(BaseModule):
 
         self.short_term_memories = lstt_curr_memories_2d
 
-        if (self.frame_step - self.last_mem_step >= self.long_term_mem_gap) or (new_inst_exist):
+        if (self.frame_step - self.last_mem_step >= self.global_mem_interval) or (new_inst_exist):
             self.update_long_term_memory(lstt_curr_memories)
             self.last_mem_step = self.frame_step
 

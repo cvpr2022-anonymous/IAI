@@ -8,7 +8,6 @@ from .single_stage import SingleStageDetector
 from mmcv.cnn import kaiming_init
 from .utils import split_frames, process_id, get_new_masks, aligned_bilinear
 from fvcore.nn import sigmoid_focal_loss_jit
-from networks.layers.loss import CrossEntropyLoss, SoftJaccordLoss
 
 TEST_TIME = False
 
