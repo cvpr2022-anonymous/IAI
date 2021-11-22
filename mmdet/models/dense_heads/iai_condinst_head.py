@@ -56,8 +56,10 @@ def multiclass_nms(multi_bboxes,
     points = multi_points.reshape(-1, 2)
     strides = multi_strides.reshape(-1, 1)
 
-    # remove low scoring boxes
+    # combine id_score & cls_score to remove low scoring boxes
     valid_mask = (cls_scores > cls_score_thr) & (id_scores > id_score_thr)
+    # use combination of id_score & cls_score to rank points during nms
+    # in first frame, cls_scores weighs more than id_score as no previous information
     if is_first:
         scores = cls_scores + 0.5 * id_scores
     else:
@@ -202,7 +204,6 @@ class IAICondInstHead(AnchorFreeHead):
         self.norm_cfg = norm_cfg
         self.norm_on_bbox = norm_on_bbox
 
-        # conv
         self.regress_ranges = regress_ranges
         self.center_sampling = center_sampling
         self.center_sample_radius = center_sample_radius
@@ -210,7 +211,8 @@ class IAICondInstHead(AnchorFreeHead):
         self.loss_cls = build_loss(loss_cls)
         self.loss_bbox = build_loss(loss_bbox)
         self.loss_centerness = build_loss(loss_centerness)
-        # add new loss id
+
+        # add new ID loss
         if loss_id is not None:
             self.loss_id = build_loss(loss_id)
 
@@ -218,9 +220,11 @@ class IAICondInstHead(AnchorFreeHead):
 
     def _init_layers(self):
         """Initialize layers of the head."""
+        # add new id head consists of two 1x1 convolution layers
+        # id_convs 1 conv + conv_id 1 conv
+
         self.relu = nn.ReLU(inplace=True)
         self.cls_convs = nn.ModuleList()
-        # new id head consists of 1x1 convolution layers
         self.id_convs = nn.ModuleList()
         self.reg_convs = nn.ModuleList()
         for i in range(self.stacked_convs):
@@ -234,7 +238,7 @@ class IAICondInstHead(AnchorFreeHead):
                     padding=1,
                     conv_cfg=self.conv_cfg,
                     norm_cfg=self.norm_cfg))
-            if i <= 0:
+            if i == 0:
                 self.id_convs.append(
                     ConvModule(
                         chn,
@@ -457,7 +461,6 @@ class IAICondInstHead(AnchorFreeHead):
                       gt_masks=None,
                       gt_ids=None,
                       gt_ori_ids=None,
-                      use_pred=False,
                       is_first=False,
                       proposal_cfg=None,
                       **kwargs):
@@ -544,7 +547,6 @@ class IAICondInstHead(AnchorFreeHead):
                    cfg=None,
                    rescale=False,
                    with_nms=True,
-                   use_pred=False,
                    gt_bboxes=None,
                    gt_ori_ids=None,
                    gt_masks_list=None,
@@ -578,26 +580,28 @@ class IAICondInstHead(AnchorFreeHead):
         """
         cfg = self.test_cfg if cfg is None else cfg
         assert len(cls_scores) == len(bbox_preds)
-        num_levels = len(cls_scores)
-        device = cls_scores[0].device
-        featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
+        #device = cls_scores[0].device
 
+        # initial ID numbers for a new video
         if is_first:
             self.curr_inst_id = [0 for i in range(len(img_metas))]
+        mask_results_list = []
+
+        max_h, max_w = 0, 0
+        for img_id in range(len(img_metas)):
+            pad_shape = img_metas[img_id]['pad_shape']
+            h, w = pad_shape[:2]
+            max_h = max(max_h, h)
+            max_w = max(max_w, w)
+        id_masks = cls_scores[0].new_zeros(len(img_metas), self.max_obj_num+1, max_h, max_w)
+        id_masks[:, self.max_obj_num] = 1
+        new_inst_exists = False
+
+        # get multiple level points for all featmaps from different scales
+        num_levels = len(cls_scores)
+        featmap_sizes = [cls_scores[i].shape[-2:] for i in range(num_levels)]
         mlvl_points, mlvl_strides = self.get_points(featmap_sizes, bbox_preds[0].dtype,
             bbox_preds[0].device)
-
-        mask_results_list = []
-        if use_pred:
-            max_h, max_w = 0, 0
-            for img_id in range(len(img_metas)):
-                pad_shape = img_metas[img_id]['pad_shape']
-                h, w = pad_shape[:2]
-                max_h = max(max_h, h)
-                max_w = max(max_w, w)
-            id_masks = cls_scores[0].new_zeros(len(img_metas), self.max_obj_num+1, max_h, max_w)
-            id_masks[:, self.max_obj_num] = 1
-            new_inst_exists = False
 
         for img_id in range(len(img_metas)):
             cls_score_list = [
@@ -621,6 +625,7 @@ class IAICondInstHead(AnchorFreeHead):
             scale_factor = img_metas[img_id]['scale_factor']
             ori_shape = img_metas[img_id]['ori_shape']
 
+            # get predict bboxes, ids, classication scores, ori_masks(for output results, original image shape), det_masks(for association, input shape)
             det_bboxes, det_id_scores, det_cls_scores, ori_masks, det_masks = self._get_bboxes_single(
                 cls_score_list,
                 id_score_list,
@@ -639,73 +644,78 @@ class IAICondInstHead(AnchorFreeHead):
                 test_mode=test_mode,
                 is_first=is_first)
 
-            if use_pred:
-                keep = []
-                new_pad_masks = []
-                bg_mask = id_masks.new_ones((max_h, max_w), dtype=torch.bool)
+            # remove some wrong masks (no positive area or occluded by previous masks)
+            keep = []
+            new_pad_masks = []
+            bg_mask = id_masks.new_ones((max_h, max_w), dtype=torch.bool)
+            if ori_masks is not None:
+                ori_bg_mask = id_masks.new_ones(ori_masks[0].shape, dtype=torch.bool)
+                new_ori_masks = []
+
+            for i in range(len(det_bboxes)):
+                mask = det_masks[i].bool()
+                pad = (0, max_w - mask.shape[1], 0, max_h - mask.shape[0])
+                pad_mask = F.pad(mask, pad, value=0)
+                new_pad_mask = bg_mask & pad_mask
+                bg_mask[new_pad_mask] = 0
+                area = pad_mask.sum()
+                if (area == 0) or float(new_pad_mask.sum()) / float(area) < 0.1:
+                    continue
+                keep.append(i)
+                new_pad_masks.append(new_pad_mask)
+
                 if ori_masks is not None:
-                    ori_bg_mask = id_masks.new_ones(ori_masks[0].shape, dtype=torch.bool)
-                    new_ori_masks = []
-                for i in range(len(det_bboxes)):
-                    mask = det_masks[i].bool()
-                    pad = (0, max_w - mask.shape[1], 0, max_h - mask.shape[0])
-                    pad_mask = F.pad(mask, pad, value=0)
-                    new_pad_mask = bg_mask & pad_mask
-                    bg_mask[new_pad_mask] = 0
-                    area = pad_mask.sum()
-                    if (area == 0) or float(new_pad_mask.sum()) / float(area) < 0.1:
-                        continue
-                    keep.append(i)
-                    new_pad_masks.append(new_pad_mask)
+                    new_ori_mask = ori_bg_mask & ori_masks[i].bool()
+                    ori_bg_mask[new_ori_mask] = 0
+                    new_ori_masks.append(new_ori_mask)
 
-                    if ori_masks is not None:
-                        new_ori_mask = ori_bg_mask & ori_masks[i].bool()
-                        ori_bg_mask[new_ori_mask] = 0
-                        new_ori_masks.append(new_ori_mask)
+            if len(keep) > 0:
+                det_bboxes = det_bboxes[keep]
+                det_id_scores = det_id_scores[keep]
+                if ori_masks is not None:
+                    ori_masks = ori_masks[keep]
+                det_cls_scores = det_cls_scores[keep]
 
-                if len(keep) > 0:
-                    det_bboxes = det_bboxes[keep]
-                    det_id_scores = det_id_scores[keep]
-                    if ori_masks is not None:
-                        ori_masks = ori_masks[keep]
-                    det_cls_scores = det_cls_scores[keep]
+            # hungarian algorithm to assign unique ID for each instance
+            from scipy.optimize import linear_sum_assignment
+            if is_first:
+                det_ids = det_id_scores.new_ones(det_bboxes.shape[0]) * (self.max_obj_num - 1)
+            else:
+                if len(det_id_scores) > 0:
+                    new_id_scores = det_id_scores[:, self.max_obj_num-1].repeat(len(det_id_scores)-1,1)
+                    id_scores_matrix = -torch.cat((det_id_scores.transpose(0,1), new_id_scores)).transpose(0,1).cpu()
+                    row_ind, col_ind = linear_sum_assignment(id_scores_matrix)
+                    det_ids = col_ind
+                if (not test_mode) and (len(gt_bboxes[img_id][add]) > 0):
+                    det_ids = np.concatenate((gt_ori_ids[img_id][add].flatten(0).cpu().numpy(), det_ids))
 
-                from scipy.optimize import linear_sum_assignment
-                if is_first:
-                    det_ids = det_id_scores.new_ones(det_bboxes.shape[0]) * (self.max_obj_num - 1)
-                else:
-                    if len(det_id_scores) > 0:
-                        new_id_scores = det_id_scores[:, self.max_obj_num-1].repeat(len(det_id_scores)-1,1)
-                        id_scores_matrix = -torch.cat((det_id_scores.transpose(0,1), new_id_scores)).transpose(0,1).cpu()
-                        row_ind, col_ind = linear_sum_assignment(id_scores_matrix)
-                        det_ids = col_ind
-                    if (not test_mode) and (len(gt_bboxes[img_id][add]) > 0):
-                        det_ids = np.concatenate((gt_ori_ids[img_id][add].flatten(0).cpu().numpy(), det_ids))
+            # combine ID with masks to generate ID masks
+            det_obj_ids = []
+            cls_scores_dict = {}
+            curr_max_id = self.curr_inst_id[img_id]
+            for i in range(len(keep)):
+                id_pred = det_ids[i].item()
+                new_pad_mask = new_pad_masks[i]
 
-                cls_scores_dict = {}
-                det_obj_ids = []
-                curr_max_id = self.curr_inst_id[img_id]
-                for i in range(len(keep)):
-                    id_pred = det_ids[i].item()
-                    new_pad_mask = new_pad_masks[i]
+                # in first frame or in the following frames new instance exists
+                if (is_first) or (id_pred >= curr_max_id):
+                    new_inst_exists = True
+                    id_pred = self.curr_inst_id[img_id]
+                    self.curr_inst_id[img_id] += 1
+                    # if instance ID number surpass the maximum object numbers, ignore this object
+                    if self.curr_inst_id[img_id] > self.max_obj_num-2:
+                        self.curr_inst_id[img_id] = self.max_obj_num-2
 
-                    if (is_first) or (id_pred >= curr_max_id):
-                        new_inst_exists = True
-                        id_pred = self.curr_inst_id[img_id]
-                        self.curr_inst_id[img_id] += 1
-                        if self.curr_inst_id[img_id] > self.max_obj_num-2:
-                            self.curr_inst_id[img_id] = self.max_obj_num-2
-                    if id_pred in det_obj_ids:
+                if id_pred in det_obj_ids:
+                    id_pred = self.curr_inst_id[img_id]
+                    self.curr_inst_id[img_id] += 1
+                    if self.curr_inst_id[img_id] > self.max_obj_num-2:
+                        self.curr_inst_id[img_id] = self.max_obj_num-2
 
-                        id_pred = self.curr_inst_id[img_id]
-                        self.curr_inst_id[img_id] += 1
-                        if self.curr_inst_id[img_id] > self.max_obj_num-2:
-                            self.curr_inst_id[img_id] = self.max_obj_num-2
-
-                    det_obj_ids.append(id_pred)
-                    cls_scores_dict[id_pred] = det_cls_scores[i]
-                    id_masks[img_id][id_pred] = new_pad_mask #* det_cls_scores[i].max()
-                    id_masks[img_id][self.max_obj_num][new_pad_mask] = 0
+                det_obj_ids.append(id_pred)
+                cls_scores_dict[id_pred] = det_cls_scores[i]
+                id_masks[img_id][id_pred] = new_pad_mask
+                id_masks[img_id][self.max_obj_num][new_pad_mask] = 0
 
             if len(keep) == 0:
                 bbox_results = {}
@@ -721,8 +731,7 @@ class IAICondInstHead(AnchorFreeHead):
                 mask_results[id_pred] = mask
             mask_results_list.append(mask_results)
 
-        if use_pred:
-            return bbox_results, mask_results_list, id_masks, new_inst_exists, cls_scores_dict
+        return bbox_results, mask_results_list, id_masks, new_inst_exists, cls_scores_dict
 
     def _get_bboxes_single(self,
                            cls_scores,
@@ -1173,7 +1182,7 @@ class IAICondInstHead(AnchorFreeHead):
         outputs = self(x)
         bbox_inputs = outputs + (img_metas, self.test_cfg, rescale)
 
-        bbox_results, segm_results, id_masks, new_inst_exists, cls_scores_dict = self.get_bboxes(*bbox_inputs, use_pred=True, test_mode=True, is_first=is_first)
+        bbox_results, segm_results, id_masks, new_inst_exists, cls_scores_dict = self.get_bboxes(*bbox_inputs, test_mode=True, is_first=is_first)
 
         return [(bbox_results, segm_results)], id_masks, new_inst_exists, cls_scores_dict
 
