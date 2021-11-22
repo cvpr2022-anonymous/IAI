@@ -30,6 +30,7 @@ class LSTTBlock(BaseModule):
     ''' lstt block for association across frames
         In this lstt block, we use long_term_memories to store global memory
             & shor_term_memories to store short memory
+        lstt block will associate features through attention mechanism from current frame & memory frames
     '''
 
     def __init__(self,
