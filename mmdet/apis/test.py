@@ -7,11 +7,87 @@ import time
 import mmcv
 import torch
 import torch.distributed as dist
+import numpy as np
 from mmcv.image import tensor2imgs
 from mmcv.runner import get_dist_info
 
 from mmdet.core import encode_mask_results
 
+
+def results2json_videoseg(dataset, results, out_file):
+    json_results = []
+    vid_objs = {}
+
+    for idx in range(len(dataset)):
+      vid_id, frame_id = dataset.img_ids[idx]
+      if idx == len(dataset) - 1 :
+        is_last = True
+      else:
+        _, frame_id_next = dataset.img_ids[idx+1]
+        is_last = frame_id_next == 0
+      det, seg = results[idx]
+      for obj_id in det:
+        bbox = det[obj_id]['bbox']
+        segm = seg[obj_id]
+        label = det[obj_id]['label']
+        if obj_id not in vid_objs:
+            vid_objs[obj_id] = {'scores':[],'cats':[], 'segms':{}}
+        vid_objs[obj_id]['scores'].append(bbox[4])
+        vid_objs[obj_id]['cats'].append(label)
+        segm['counts'] = segm['counts'].decode()
+        vid_objs[obj_id]['segms'][frame_id] = segm
+      if is_last:
+        # store results of  the current video
+        for obj_id, obj in vid_objs.items():
+          data = dict()
+
+          data['video_id'] = vid_id + 1
+          data['score'] = np.array(obj['scores']).mean().item()
+          # majority voting for sequence category
+          data['category_id'] = np.bincount(np.array(obj['cats'])).argmax().item() + 1
+          vid_seg = []
+          for fid in range(frame_id + 1):
+            if fid in obj['segms']:
+              vid_seg.append(obj['segms'][fid])
+            else:
+              vid_seg.append(None)
+          data['segmentations'] = vid_seg
+          json_results.append(data)
+        vid_objs = {}
+    mmcv.dump(json_results, out_file)
+
+def manage_video_instance(results, scores_dict, first_frame, last_frame, new_results):
+    ''' manage instance category & confidence score in a video
+        average condidence scores across frames & get valid categories through the video
+    '''
+    new_id = 0
+    new_ids_dict = {}
+    new_scores_dict = {}
+    new_labels_dict = {}
+    for id, cls_scores in scores_dict.items():
+        scores, labels = torch.topk(cls_scores, 5)
+        valid_idx = (scores >= 0.05) & (labels != 40)
+        new_scores_dict[id] = scores[valid_idx]
+        new_labels_dict[id] = labels[valid_idx]
+        new_ids_dict[id] = torch.arange(new_id, new_id+sum(valid_idx))
+        new_id += sum(valid_idx)
+
+    for j in range(first_frame, last_frame):
+        new_result = {}
+        new_bbox_results = {}
+        new_segm_results = {}
+        for id in results[j][0].keys():
+            for label, score, new_id in zip(new_labels_dict[id], new_scores_dict[id], new_ids_dict[id]):
+                new_bbox_result = {}
+                new_bbox_result['bbox'] = np.append(results[j][0][id]['bbox'][:4], score.item())
+                new_bbox_result['label'] = label.item()
+                import copy
+                new_segm_result = copy.deepcopy(results[j][1][id])
+                new_bbox_results[new_id.item()] = new_bbox_result
+                new_segm_results[new_id.item()] = new_segm_result
+        new_result = [(new_bbox_results, new_segm_results)]
+
+        new_results.extend(new_result)
 
 def single_gpu_test(model,
                     data_loader,
@@ -22,47 +98,35 @@ def single_gpu_test(model,
     results = []
     dataset = data_loader.dataset
     prog_bar = mmcv.ProgressBar(len(dataset))
+    curr_video_first_frame = 0
+    new_results = []
     for i, data in enumerate(data_loader):
+        is_end = (i == len(dataset)-1)
         with torch.no_grad():
-            result = model(return_loss=False, rescale=True, **data)
+            result, scores_dict = model(return_loss=False, rescale=True, is_end=is_end, **data)
 
+        img_metas = data['img_metas'][0].data[0]
+        if scores_dict is not None:
+            if img_metas[0]['is_first']:
+                curr_video_last_frame = i
+                manage_video_instance(results, scores_dict, curr_video_first_frame, curr_video_last_frame, new_results)
+                curr_video_first_frame = i
         batch_size = len(result)
-        if show or out_dir:
-            if batch_size == 1 and isinstance(data['img'][0], torch.Tensor):
-                img_tensor = data['img'][0]
-            else:
-                img_tensor = data['img'][0].data[0]
-            img_metas = data['img_metas'][0].data[0]
-            imgs = tensor2imgs(img_tensor, **img_metas[0]['img_norm_cfg'])
-            assert len(imgs) == len(img_metas)
-
-            for i, (img, img_meta) in enumerate(zip(imgs, img_metas)):
-                h, w, _ = img_meta['img_shape']
-                img_show = img[:h, :w, :]
-
-                ori_h, ori_w = img_meta['ori_shape'][:-1]
-                img_show = mmcv.imresize(img_show, (ori_w, ori_h))
-
-                if out_dir:
-                    out_file = osp.join(out_dir, img_meta['ori_filename'])
-                else:
-                    out_file = None
-
-                model.module.show_result(
-                    img_show,
-                    result[i],
-                    show=show,
-                    out_file=out_file,
-                    score_thr=show_score_thr)
 
         # encode mask results
         if isinstance(result[0], tuple):
             result = [(bbox_results, encode_mask_results(mask_results))
-                      for bbox_results, mask_results in result]
+                  for bbox_results, mask_results in result]
         results.extend(result)
 
         for _ in range(batch_size):
             prog_bar.update()
+
+    if scores_dict is not None:
+        curr_video_last_frame = len(dataset)
+        manage_video_instance(results, scores_dict, curr_video_first_frame, curr_video_last_frame, new_results)
+
+    results2json_videoseg(dataset, new_results, './output/results.json')
     return results
 
 
