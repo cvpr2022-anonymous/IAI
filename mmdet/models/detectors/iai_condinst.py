@@ -9,7 +9,6 @@ from mmcv.cnn import kaiming_init
 from .utils import split_frames, process_id, get_new_masks, aligned_bilinear
 from fvcore.nn import sigmoid_focal_loss_jit
 
-TEST_TIME = False
 
 @DETECTORS.register_module()
 class IAICondInst(SingleStageDetector):
@@ -40,11 +39,10 @@ class IAICondInst(SingleStageDetector):
         self.max_obj_num = id_cfg.max_obj_num
         self.lstt = build_head(lstt_block)
         self.new_inst_exist = False
-        if neck is not None:
-            self.encoder_projector = nn.Conv2d(
-                neck.in_channels[-2]*2, neck.out_channels, kernel_size=1)
-            self.backbone_projector = nn.Conv2d(
-                neck.in_channels[-2]*2, neck.in_channels[-2]+512, kernel_size=1)
+        self.encoder_projector = nn.Conv2d(
+            neck.in_channels[-2]*2, neck.out_channels, kernel_size=1)
+        self.backbone_projector = nn.Conv2d(
+            neck.in_channels[-2]*2, neck.in_channels[-2]+512, kernel_size=1)
         self.cls_scores = {}
 
     def extract_feat(self, img):
@@ -118,21 +116,18 @@ class IAICondInst(SingleStageDetector):
         is_first = img_metas[0]['is_first']
 
         if is_first:
-            # average classification scores for the last video and initialize for the new video
+            # average classification scores for the last video
             import copy
             return_cls_scores = copy.deepcopy(self.cls_scores)
             for key, val in return_cls_scores.items():
                 return_cls_scores[key] = val / self.cls_scores_num[key]
             self.cls_scores = {}
             self.cls_scores_num = {}
-            # restart lstt for the new video
             self.lstt.restart(batch_size=1, enable_id_shuffle=False)
-            # initial all zeros masks for the first frame as there is not previous frames.
             h, w = img.size()[2:]
             prev_one_hot_masks = img.new_zeros(1, self.max_obj_num+1, h, w)
         else:
             return_cls_scores = None
-            # use ID masks prediction of last frame
             prev_one_hot_masks = self.pred_masks
 
         # use lstt to combine backbone features & ID embedding
@@ -161,7 +156,6 @@ class IAICondInst(SingleStageDetector):
         else:
             self.lstt.update_short_term_memory(self.pred_masks, self.new_inst_exist)
 
-        # count classification scores of different frames in a video
         if cls_scores is not None:
             for obj_id, cls_score in cls_scores.items():
                 if obj_id in self.cls_scores:
@@ -171,7 +165,7 @@ class IAICondInst(SingleStageDetector):
                     self.cls_scores[obj_id] = cls_score
                     self.cls_scores_num[obj_id] = 1
 
-        # last frame of dataset, average the classification scores
+        # if is the last image of the whole dataset, average classification scores for the current video
         if is_end:
             import copy
             return_cls_scores = copy.deepcopy(self.cls_scores)

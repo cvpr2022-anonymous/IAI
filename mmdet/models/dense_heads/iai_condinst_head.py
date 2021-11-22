@@ -14,28 +14,6 @@ from ..losses import cross_entropy, accuracy
 import pycocotools.mask as mask_util
 
 INF = 1e8
-EPS = 1e-12
-TEST_TIME = False
-
-def bbox2result(bboxes, labels, num_classes):
-    """Convert detection results to a list of numpy arrays.
-
-    Args:
-        bboxes (Tensor): shape (n, 5)
-        labels (Tensor): shape (n, )
-        num_classes (int): class number, including background class
-
-    Returns:
-        list(ndarray): bbox results of each class
-    """
-    if bboxes.shape[0] == 0:
-        return [
-            np.zeros((0, 5), dtype=np.float32) for i in range(num_classes)
-        ]
-    else:
-        bboxes = bboxes.cpu().numpy()
-        labels = labels.cpu().numpy()
-        return [bboxes[labels == i, :] for i in range(num_classes)]
 
 def multiclass_nms(multi_bboxes,
                    multi_cls_scores,
@@ -84,16 +62,6 @@ def multiclass_nms(multi_bboxes,
         keep = keep[:max_num]
 
     return dets, kernels[keep], points[keep], strides[keep], return_inds[keep]
-
-def dice_coefficient(x, target):
-    eps = 1e-5
-    n_instance = x.size(0)
-    x = x.reshape(n_instance, -1)
-    target = target.reshape(n_instance, -1)
-    intersection = (x * target).sum(dim=1)
-    union = (x ** 2.0).sum(dim=1) + (target ** 2.0).sum(dim=1) + eps
-    loss = 1. - (2 * intersection / union)
-    return loss
 
 def parse_dynamic_params(params, channels, weight_nums, bias_nums):
     assert params.dim() == 2
@@ -163,6 +131,7 @@ def aligned_bilinear(tensor, factor):
 class IAICondInstHead(AnchorFreeHead):
     """IAICondInstHead
        add new id head to original CondInst head
+       & new post-processing for ID prediction
     """
     def __init__(self,
                  num_classes,
