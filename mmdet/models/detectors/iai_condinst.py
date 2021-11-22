@@ -13,7 +13,7 @@ TEST_TIME = False
 
 @DETECTORS.register_module()
 class IAICondInst(SingleStageDetector):
-    """iai condinst detectors for VIS.
+    """iai paradigm on condinst detectors for VIS.
         add lstt block to associate features
     """
 
@@ -118,7 +118,6 @@ class IAICondInst(SingleStageDetector):
         is_first = img_metas[0]['is_first']
 
         if is_first:
-            self.is_first = is_first
             # average classification scores for the last video and initialize for the new video
             import copy
             return_cls_scores = copy.deepcopy(self.cls_scores)
@@ -133,8 +132,8 @@ class IAICondInst(SingleStageDetector):
             prev_one_hot_masks = img.new_zeros(1, self.max_obj_num+1, h, w)
         else:
             return_cls_scores = None
+            # use prediction of last frame
             prev_one_hot_masks = self.pred_masks
-            is_first = self.is_first
 
         new_feat = self.encoder_projector(feats[-1])
         new_feats = (feats[0], feats[1], feats[2], new_feat)
@@ -154,10 +153,7 @@ class IAICondInst(SingleStageDetector):
 
         results, self.pred_masks, self.new_inst_exist, cls_scores = \
             self.bbox_head.simple_test(enc_feats, img_metas, rescale=rescale,
-                                    is_first=self.is_first)
-
-        if (self.is_first) and (self.new_inst_exist):
-            self.is_first = False
+                                    is_first=is_first)
 
         if is_first:
             self.lstt.reset_memory(self.pred_masks)
