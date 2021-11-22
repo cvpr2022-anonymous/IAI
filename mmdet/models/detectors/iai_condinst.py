@@ -6,7 +6,6 @@ from mmdet.core import bbox2roi
 from ..builder import DETECTORS, build_head, build_neck, build_roi_extractor, build_loss
 from .single_stage import SingleStageDetector
 from mmcv.cnn import kaiming_init
-from .utils import split_frames, process_id, get_new_masks, aligned_bilinear
 from fvcore.nn import sigmoid_focal_loss_jit
 
 
@@ -37,12 +36,17 @@ class IAICondInst(SingleStageDetector):
         self.num_frames = id_cfg.num_frames
         self.batch_size = id_cfg.batch_size
         self.max_obj_num = id_cfg.max_obj_num
-        self.lstt = build_head(lstt_block)
         self.new_inst_exist = False
+
+        # lstt block for implementing association module
+        self.lstt = build_head(lstt_block)
+
+        # project backbone features for lstt block to encode ID features
         self.encoder_projector = nn.Conv2d(
-            neck.in_channels[-2]*2, neck.out_channels, kernel_size=1)
+            2048, 256, kernel_size=1)
+        # project backbone features for preserving classification features
         self.backbone_projector = nn.Conv2d(
-            neck.in_channels[-2]*2, neck.in_channels[-2]+512, kernel_size=1)
+            2048, 1536, kernel_size=1)
         self.cls_scores = {}
 
     def extract_feat(self, img):

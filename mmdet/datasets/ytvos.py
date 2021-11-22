@@ -96,7 +96,6 @@ class YTVOSDataset(CustomDataset):
         # num_frames in a video
         self.num_frames = 5
 
-
     def __len__(self):
         return len(self.img_ids)
 
