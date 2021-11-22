@@ -132,16 +132,15 @@ class IAICondInst(SingleStageDetector):
             prev_one_hot_masks = img.new_zeros(1, self.max_obj_num+1, h, w)
         else:
             return_cls_scores = None
-            # use prediction of last frame
+            # use ID masks prediction of last frame
             prev_one_hot_masks = self.pred_masks
 
+        # use lstt to combine backbone features & ID embedding
         new_feat = self.encoder_projector(feats[-1])
         new_feats = (feats[0], feats[1], feats[2], new_feat)
-
         lstt_embs = self.lstt(new_feats, prev_one_hot_masks, self.new_inst_exist)
         embs = [new_feats[-1]]
         n, c, h, w = new_feats[-1].size()
-
         for emb in lstt_embs:
             embs.append(emb.view(h, w, n, c).permute(2, 3, 0, 1))
         backbone_cls_feat = self.backbone_projector(feats[-1])
@@ -155,11 +154,14 @@ class IAICondInst(SingleStageDetector):
             self.bbox_head.simple_test(enc_feats, img_metas, rescale=rescale,
                                     is_first=is_first)
 
+        # update local memory & global memory
+        # for first frame there is not previous memory, so reset memory
         if is_first:
             self.lstt.reset_memory(self.pred_masks)
         else:
             self.lstt.update_short_term_memory(self.pred_masks, self.new_inst_exist)
 
+        # count classification scores of different frames in a video
         if cls_scores is not None:
             for obj_id, cls_score in cls_scores.items():
                 if obj_id in self.cls_scores:
