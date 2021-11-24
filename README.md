@@ -6,7 +6,7 @@ This repo is the evaluation code of IAI + CondInst model for video instance segm
 <img src='doc/IAI_framework.png'>
 
 ## Prepare Environment
-This repo is built on MMDetection-2.11, and it requires Python3 and PyTorch >= 1.5. This repo also relies on mmcv & pycocotools, and you could install them by using following commands.
+This repo is built on MMDetection-2.11, and it requires Python3 and PyTorch >= 1.5. This repo also relies on MMCV-1.3.8 & pycocotools-VIS-version, and you could install them by using following commands.
 ```
 pip install git+https://github.com/youtubevos/cocoapi.git#"egg=pycocotools&subdirectory=PythonAPI"
 
